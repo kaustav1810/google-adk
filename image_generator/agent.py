@@ -1,11 +1,17 @@
 # -*- coding: utf-8 -*-
-"""Image generation agent with LRO (Long Running Operation) and approval flow."""
+"""Image generation agent with approval flow.
+
+Usage:
+    - ADK Web: adk web (from parent directory)
+    - Terminal: python -m image_generator.agent
+"""
 
 import asyncio
-import base64
-import os
 import sys
 import uuid
+
+# Add parent directory to path for imports
+sys.path.insert(0, str(__file__).rsplit("/", 2)[0])
 
 from google.adk.agents import LlmAgent
 from google.adk.apps.app import App, ResumabilityConfig
@@ -28,17 +34,32 @@ NUM_IMAGE_THRESHOLD = 1
 MCP_TIMEOUT = 120.0
 IMAGE_MCP_SERVER = "@singularity2045/image-generator-mcp-server"
 APP_NAME = "image_generator_app"
-USER_ID = "kaus123"
+USER_ID = "user"
+
+# Output directory (relative to this file)
+import os
+from pathlib import Path
+
+OUTPUT_DIR = Path(__file__).parent / "output"
+
+
+def clear_output_folder() -> None:
+    """Clear all files in the output folder."""
+    if OUTPUT_DIR.exists():
+        for file in OUTPUT_DIR.iterdir():
+            if file.is_file():
+                file.unlink()
+        logger.info("Output folder cleared: %s", OUTPUT_DIR)
+    OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 
 
 def display_image(file_path: str) -> str:
-    """Displays an image from a file path."""
-    try:
-        with open(file_path, "rb") as image_file:
-            encoded_string = base64.b64encode(image_file.read()).decode("utf-8")
-        return f"![Generated Image](data:image/png;base64,{encoded_string})"
-    except Exception as e:
-        return f"Error displaying image: {e}"
+    """Returns the file path where image is saved."""
+    import os
+    if os.path.exists(file_path):
+        size_kb = os.path.getsize(file_path) / 1024
+        return f"Image saved at: {file_path} ({size_kb:.1f} KB). Open with: open {file_path}"
+    return f"Image file not found at: {file_path}"
 
 
 def create_image_approval_tool() -> FunctionTool:
@@ -48,15 +69,12 @@ def create_image_approval_tool() -> FunctionTool:
         """
         Requests approval before generating multiple images.
 
-        Acts as a gatekeeper for image generation. If the number of images
-        exceeds NUM_IMAGE_THRESHOLD, requests user confirmation before proceeding.
-
         Args:
             num_image: Number of images to be generated.
             tool_context: ADK tool context for managing the confirmation flow.
 
         Returns:
-            dict: Contains 'status' ('SUCCESS', 'PENDING', or 'REJECTED') and 'message'.
+            dict: Contains 'status' and 'message'.
         """
         if num_image <= NUM_IMAGE_THRESHOLD:
             return {"status": "SUCCESS", "message": "Image has been generated!"}
@@ -77,7 +95,7 @@ def create_image_approval_tool() -> FunctionTool:
 
 
 def create_mcp_toolset(config: Config) -> McpToolset:
-    """Create and configure MCP toolset for image generation."""
+    """Create MCP toolset for image generation."""
     return McpToolset(
         connection_params=StdioConnectionParams(
             timeout=MCP_TIMEOUT,
@@ -95,15 +113,20 @@ def create_mcp_toolset(config: Config) -> McpToolset:
     )
 
 
-def create_agent(config: Config, mcp_toolset: McpToolset,retry_config:types.HttpRetryOptions) -> LlmAgent:
-    """Create and configure the image generator agent."""
+def create_agent(
+    config: Config, mcp_toolset: McpToolset, retry_config: types.HttpRetryOptions
+) -> LlmAgent:
+    """Create the image generator agent."""
+    output_path = str(OUTPUT_DIR)
     return LlmAgent(
         model=Gemini(model=config.model_name, retry_options=retry_config),
         name="image_generator_agent",
-        instruction="""You are an expert at generating images.
+        description="An agent that generates images with approval flow for multiple images.",
+        instruction=f"""You are an expert at generating images.
 When a user asks to generate an image, you must:
-1. First call `request_image_generation` with the number of images requested. This handles approval for multiple images.
-2. If approved (status is SUCCESS), call the `generate_image` MCP tool with a temporary file path (e.g., "/tmp/image.png").
+1. First call `request_image_generation` with the number of images requested.
+2. If approved (status is SUCCESS), call the `generate_image` MCP tool with file path in this folder: {output_path}
+   Use filenames like image_1.png, image_2.png, etc.
 3. After the image is generated, call `display_image` with the same file path to show the result.""",
         tools=[
             create_image_approval_tool(),
@@ -122,24 +145,11 @@ def create_app(agent: LlmAgent) -> App:
     )
 
 
-def print_agent_response(events: list) -> None:
-    """Prints text responses from agent events."""
-    for event in events:
-        if event.content and event.content.parts:
-            for part in event.content.parts:
-                logger.info("Agent response: %s", part)
+# --- Workflow functions for terminal usage ---
 
 
 def check_for_approval(events: list) -> dict | None:
-    """
-    Checks events for an approval request from the agent.
-
-    Args:
-        events: List of agent events to scan.
-
-    Returns:
-        dict with 'approval_id' and 'invocation_id' if found, else None.
-    """
+    """Check events for an approval request."""
     for event in events:
         if event.content and event.content.parts:
             for part in event.content.parts:
@@ -155,16 +165,7 @@ def check_for_approval(events: list) -> dict | None:
 
 
 def construct_adk_response(approval_id: str, confirmed: bool = True) -> types.Content:
-    """
-    Constructs an ADK confirmation response to resume agent execution.
-
-    Args:
-        approval_id: The function call ID from the confirmation request.
-        confirmed: Whether the user approved the action.
-
-    Returns:
-        types.Content with the FunctionResponse for resuming the agent.
-    """
+    """Construct ADK confirmation response."""
     adk_confirmation_response = FunctionResponse(
         id=approval_id,
         name="adk_request_confirmation",
@@ -182,18 +183,7 @@ async def run_workflow(
     user_query: str,
     is_approved: bool = True,
 ) -> None:
-    """
-    Runs the image generation workflow with approval handling.
-
-    Creates a session, sends the user query to the agent, and handles
-    any confirmation requests before resuming execution.
-
-    Args:
-        runner: The ADK runner instance.
-        session_service: The session service for managing sessions.
-        user_query: The user's image generation request.
-        is_approved: Whether to auto-approve confirmation requests.
-    """
+    """Run the image generation workflow with approval handling."""
     session_id = str(uuid.uuid4())
 
     await session_service.create_session(
@@ -228,19 +218,40 @@ async def run_workflow(
                 for part in event.content.parts:
                     logger.info("Part: %s", part)
     else:
-        print_agent_response(events)
+        for event in events:
+            if event.content and event.content.parts:
+                for part in event.content.parts:
+                    logger.info("Agent response: %s", part)
 
 
+_config = None
+_retry_config = None
+_mcp_toolset = None
+root_agent = None
+
+# --- ADK Web Discovery ---
+# Export root_agent for adk web to find
+try:
+    clear_output_folder()  # Clear on every run
+    _config = load_config(require_openai=True)
+    _retry_config = create_retry_config(_config)
+    _mcp_toolset = create_mcp_toolset(_config)
+    root_agent = create_agent(_config, _mcp_toolset, _retry_config)
+except Exception as e:
+    logger.warning("Failed to initialize root_agent: %s", e)
+    root_agent = None
+    
 async def main() -> None:
-    """Main entry point for the image generation agent."""
+    """Main entry point for terminal usage."""
     try:
-        config = load_config(require_openai=True)
-        retry_config = create_retry_config(config)
+        clear_output_folder()  # Clear on every run
+        config = _config or load_config(require_openai=True)
+        retry_config = _retry_config or create_retry_config(config)
 
-        mcp_toolset = create_mcp_toolset(config)
+        mcp_toolset = _mcp_toolset or create_mcp_toolset(config)
         logger.info("MCP toolset created.")
 
-        agent = create_agent(config, mcp_toolset,retry_config)
+        agent = root_agent or create_agent(config, mcp_toolset, retry_config)
         app = create_app(agent)
         logger.info("Agent and app initialized.")
 
@@ -260,17 +271,6 @@ async def main() -> None:
     except Exception as e:
         logger.exception("Unexpected error: %s", e)
         sys.exit(1)
-
-
-# Export root_agent for ADK web discovery
-try:
-    _config = load_config(require_openai=True)
-    _retry_config = create_retry_config(_config)
-    _mcp_toolset = create_mcp_toolset(_config)
-    root_agent = create_agent(_config, _mcp_toolset, _retry_config)
-except Exception as e:
-    logger.warning("Failed to initialize root_agent: %s", e)
-    root_agent = None
 
 
 if __name__ == "__main__":

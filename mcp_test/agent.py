@@ -1,8 +1,16 @@
 # -*- coding: utf-8 -*-
-"""MCP Agent for image retrieval using Google ADK."""
+"""MCP test agent for image retrieval.
+
+Usage:
+    - ADK Web: adk web (from parent directory)
+    - Terminal: python -m mcp_test.agent
+"""
 
 import asyncio
 import sys
+
+# Add parent directory to path for imports
+sys.path.insert(0, str(__file__).rsplit("/", 2)[0])
 
 from google.adk.agents import LlmAgent
 from google.adk.models.google_llm import Gemini
@@ -14,6 +22,7 @@ from mcp import StdioServerParameters
 from config import Config, create_retry_config, load_config, logger
 
 
+# Constants
 MCP_SERVER_PACKAGE = "@modelcontextprotocol/server-everything"
 MCP_TIMEOUT = 30.0
 
@@ -36,7 +45,8 @@ def create_agent(config: Config, mcp_toolset: McpToolset) -> LlmAgent:
     """Create and configure the LLM agent."""
     retry_config = create_retry_config(config)
     return LlmAgent(
-        name="mcp_agent",
+        name="mcp_test_agent",
+        description="A test agent that uses MCP to retrieve tiny images.",
         model=Gemini(model=config.model_name, retry_options=retry_config),
         instruction=(
             "Use the getTinyImage tool to retrieve and display images. "
@@ -68,7 +78,7 @@ def is_notebook_environment() -> bool:
 def setup_notebook_async() -> None:
     """Configure async support for notebook environments."""
     logger.warning("MCP STDIO servers may have issues in Jupyter notebooks.")
-    logger.warning("Recommendation: Run from terminal with 'python agent_mcp.py'")
+    logger.warning("Recommendation: Run from terminal instead.")
 
     try:
         import nest_asyncio
@@ -85,7 +95,7 @@ def setup_notebook_async() -> None:
 
 
 def main() -> None:
-    """Main entry point."""
+    """Main entry point for terminal usage."""
     try:
         config = load_config()
 
@@ -107,6 +117,17 @@ def main() -> None:
     except Exception as e:
         logger.exception("Unexpected error: %s", e)
         sys.exit(1)
+
+
+# --- ADK Web Discovery ---
+# Export root_agent for adk web to find
+try:
+    _config = load_config()
+    _mcp_toolset = create_mcp_toolset()
+    root_agent = create_agent(_config, _mcp_toolset)
+except Exception as e:
+    logger.warning("Failed to initialize root_agent: %s", e)
+    root_agent = None
 
 
 if __name__ == "__main__":
