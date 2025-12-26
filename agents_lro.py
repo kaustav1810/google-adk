@@ -20,7 +20,8 @@ from google.genai import types
 from google.genai.types import FunctionResponse
 from mcp import StdioServerParameters
 
-from config import Config, create_retry_config, load_config, logger
+from config import Config, DEFAULT_USER_ID, create_retry_config, load_config, logger
+from utils import print_agent_response
 
 
 # Constants
@@ -28,7 +29,7 @@ NUM_IMAGE_THRESHOLD = 1
 MCP_TIMEOUT = 120.0
 IMAGE_MCP_SERVER = "@singularity2045/image-generator-mcp-server"
 APP_NAME = "image_generator_app"
-USER_ID = "kaus123"
+USER_ID = DEFAULT_USER_ID  # Re-export for backward compatibility
 
 
 def display_image(file_path: str) -> str:
@@ -120,14 +121,6 @@ def create_app(agent: LlmAgent) -> App:
         root_agent=agent,
         resumability_config=ResumabilityConfig(is_resumable=True),
     )
-
-
-def print_agent_response(events: list) -> None:
-    """Prints text responses from agent events."""
-    for event in events:
-        if event.content and event.content.parts:
-            for part in event.content.parts:
-                logger.info("Agent response: %s", part)
 
 
 def check_for_approval(events: list) -> dict | None:

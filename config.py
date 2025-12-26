@@ -16,6 +16,9 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
+# Application constants
+DEFAULT_USER_ID = "kaus123"
+
 
 @dataclass
 class Config:
