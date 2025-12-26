@@ -3,3 +3,4 @@ __pycache__/
 *.pyc
 image_generator/output/
 mcp_test/output/
+*.db
